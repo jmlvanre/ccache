@@ -19,6 +19,9 @@
 
 #include "ccache.h"
 
+#include <sys/resource.h>
+#include <sys/time.h>
+
 extern struct conf *conf;
 
 static char *
@@ -220,15 +223,20 @@ win32execute(char *path, char **argv, int doreturn,
 
 #else
 
+
 /*
   execute a compiler backend, capturing all output to the given paths
   the full path to the compiler to run is in argv[0]
 */
 int
-execute(char **argv, int fd_out, int fd_err)
+execute(char **argv, int fd_out, int fd_err, char **orig_argv)
 {
 	pid_t pid;
 	int status;
+
+        struct rusage start;
+        struct rusage stop;
+        getrusage(RUSAGE_CHILDREN, &start);
 
 	cc_log_argv("Executing ", argv);
 	pid = fork();
@@ -242,7 +250,7 @@ execute(char **argv, int fd_out, int fd_err)
 		close(fd_out);
 		dup2(fd_err, 2);
 		close(fd_err);
-		exit(execv(argv[0], argv));
+                exit(execv(argv[0], argv));
 	}
 
 	close(fd_out);
@@ -251,6 +259,43 @@ execute(char **argv, int fd_out, int fd_err)
 	if (waitpid(pid, &status, 0) != pid) {
 		fatal("waitpid failed: %s", strerror(errno));
 	}
+
+	getrusage(RUSAGE_CHILDREN, &stop);
+        long usr_cpu_usec = (((stop.ru_utime.tv_sec - start.ru_utime.tv_sec) * 1000000L) + (stop.ru_utime.tv_usec - start.ru_utime.tv_usec));
+        long sys_cpu_usec = (((stop.ru_stime.tv_sec - start.ru_stime.tv_sec) * 1000000L) + (stop.ru_stime.tv_usec - start.ru_stime.tv_usec));
+        long ru_maxrss = stop.ru_maxrss;
+        char buffer[4096];
+        char* buf = buffer;
+
+        assert(conf);
+        memset(buf, 0, 4096);
+        snprintf(buf, 4096, "%s/ccache_perf.txt", conf->cache_dir);
+
+        int fd = open(buf, O_CREAT | O_APPEND | O_WRONLY, 0666);
+        if (fd < 0) {
+          printf("error opening %s: %s\n", buf, strerror(errno));
+          return -1;
+        }
+
+        int size_left = 4096;
+        memset(buf, 0, size_left);
+        int i = 0;
+        for (i = 0; size_left > 0 && orig_argv[i] != NULL; ++i) {
+          int res = snprintf(buf, size_left, "%s ", orig_argv[i]);
+          buf += res;
+          size_left -= res;
+        }
+
+        flock(fd, LOCK_EX);
+        FILE* f = fdopen(fd, "a");
+        if (f == NULL) {
+          printf("error fdopen %s: %s\n", buf, strerror(errno));
+          return -1;
+        }
+        fprintf(f, "%ld\t%ld\t%ld\t%s\n", usr_cpu_usec, sys_cpu_usec, ru_maxrss, buffer);
+        fflush(f);
+        flock(fd, LOCK_UN);
+        fclose(f);
 
 	if (WEXITSTATUS(status) == 0 && WIFSIGNALED(status)) {
 		return -1;

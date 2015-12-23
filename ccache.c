@@ -793,7 +793,7 @@ void update_manifest_file(void)
 
 /* run the real compiler and put the result in cache */
 static void
-to_cache(struct args *args)
+to_cache(struct args *args, char **orig_argv)
 {
 	char *tmp_stdout, *tmp_stderr, *tmp_aux, *tmp_cov;
 	struct stat st;
@@ -840,7 +840,7 @@ to_cache(struct args *args)
 	}
 
 	cc_log("Running real compiler");
-	status = execute(args->argv, tmp_stdout_fd, tmp_stderr_fd);
+	status = execute(args->argv, tmp_stdout_fd, tmp_stderr_fd, orig_argv);
 	args_pop(args, 3);
 
 	if (x_stat(tmp_stdout, &st) != 0) {
@@ -1036,7 +1036,7 @@ to_cache(struct args *args)
  * Returns the hash as a heap-allocated hex string.
  */
 static struct file_hash *
-get_object_name_from_cpp(struct args *args, struct mdfour *hash)
+get_object_name_from_cpp(struct args *args, struct mdfour *hash, char **orig_argv)
 {
 	char *input_base;
 	char *tmp;
@@ -1078,7 +1078,7 @@ get_object_name_from_cpp(struct args *args, struct mdfour *hash)
 		args_add(args, "-E");
 		args_add(args, input_file);
 		cc_log("Running preprocessor");
-		status = execute(args->argv, path_stdout_fd, path_stderr_fd);
+		status = execute(args->argv, path_stdout_fd, path_stderr_fd, orig_argv);
 		args_pop(args, 2);
 	}
 
@@ -1324,7 +1324,7 @@ calculate_common_hash(struct args *args, struct mdfour *hash)
  * otherwise NULL. Caller frees.
  */
 static struct file_hash *
-calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode)
+calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode, char **orig_argv)
 {
 	int i;
 	char *manifest_name;
@@ -1536,7 +1536,7 @@ calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode)
 			cc_log("Did not find object file hash in manifest");
 		}
 	} else {
-		object_hash = get_object_name_from_cpp(args, hash);
+		object_hash = get_object_name_from_cpp(args, hash, orig_argv);
 		cc_log("Got object file hash from preprocessor");
 		if (generating_dependencies) {
 			cc_log("Preprocessor created %s", output_dep);
@@ -2786,7 +2786,7 @@ ccache(int argc, char *argv[])
 	direct_hash = common_hash;
 	if (conf->direct_mode) {
 		cc_log("Trying direct lookup");
-		object_hash = calculate_object_hash(preprocessor_args, &direct_hash, 1);
+		object_hash = calculate_object_hash(preprocessor_args, &direct_hash, 1, argv);
 		if (object_hash) {
 			update_cached_result_globals(object_hash);
 
@@ -2820,7 +2820,7 @@ ccache(int argc, char *argv[])
 	 * included_files.
 	 */
 	cpp_hash = common_hash;
-	object_hash = calculate_object_hash(preprocessor_args, &cpp_hash, 0);
+	object_hash = calculate_object_hash(preprocessor_args, &cpp_hash, 0, argv);
 	if (!object_hash) {
 		fatal("internal error: object hash from cpp returned NULL");
 	}
@@ -2862,7 +2862,7 @@ ccache(int argc, char *argv[])
 	add_prefix(compiler_args);
 
 	/* run real compiler, sending output to cache */
-	to_cache(compiler_args);
+	to_cache(compiler_args, argv);
 
 	exit(0);
 }
